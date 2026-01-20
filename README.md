@@ -22,6 +22,14 @@ Security-first authentication for Go apps, designed for SaaS and enterprise scal
 go get github.com/migueldesapazr-gif/goauth
 ```
 
+## Database Setup
+
+Initialize your PostgreSQL database with the provided schema:
+
+```bash
+psql -d your_database -f schema/postgres.sql
+```
+
 ## Quick Start
 
 ```go
@@ -64,6 +72,34 @@ func main() {
 }
 ```
 
+## OAuth Configuration
+
+Configure OAuth providers with customizable scopes:
+
+```go
+goauth.WithGoogle(clientID, clientSecret, goauth.WithGoogleScopes("email", "profile", "openid"))
+goauth.WithDiscord(clientID, clientSecret, goauth.WithDiscordScopes("identify", "email", "guilds"))
+goauth.WithGitHub(clientID, clientSecret, goauth.WithGitHubScopes("user:email", "read:user"))
+```
+
+## CAPTCHA
+
+Choose your provider:
+
+```go
+// Cloudflare Turnstile
+goauth.WithTurnstile(secret)
+
+// Google reCAPTCHA v2 (checkbox)
+goauth.WithReCaptcha(secret)
+
+// Google reCAPTCHA v3 (invisible, score-based)
+goauth.WithReCaptchaV3(secret, 0.5)
+
+// hCaptcha
+goauth.WithHCaptcha(secret)
+```
+
 ## Environment Variables
 
 ```env
@@ -73,8 +109,18 @@ GOAUTH_PEPPER=base64-32-bytes
 DATABASE_URL=postgres://user:pass@localhost/db
 ```
 
-Proxy deployments (Cloudflare, load balancers):
+OAuth providers (optional):
+```env
+GOOGLE_CLIENT_ID=xxx
+GOOGLE_CLIENT_SECRET=xxx
+DISCORD_CLIENT_ID=xxx
+DISCORD_CLIENT_SECRET=xxx
+GITHUB_CLIENT_ID=xxx
+GITHUB_CLIENT_SECRET=xxx
 ```
+
+Proxy deployments (Cloudflare, load balancers):
+```env
 GOAUTH_TRUST_PROXY_HEADERS=true
 GOAUTH_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
 ```
@@ -90,3 +136,4 @@ GOAUTH_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
 ## License
 
 MIT License - see `LICENSE`
+

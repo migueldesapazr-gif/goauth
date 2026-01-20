@@ -54,6 +54,7 @@ func (p *BaseOAuthProvider) ExchangeCode(ctx context.Context, code, redirectURL 
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "GoAuth/1.0")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -96,6 +97,7 @@ func (p *BaseOAuthProvider) GetUser(ctx context.Context, accessToken string) (*O
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "GoAuth/1.0")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -134,9 +136,20 @@ type GoogleProvider struct {
 	BaseOAuthProvider
 }
 
+// GoogleOption configures a GoogleProvider.
+type GoogleOption func(*GoogleProvider)
+
+// WithGoogleScopes sets custom scopes for Google OAuth.
+// Default scopes are "email" and "profile".
+func WithGoogleScopes(scopes ...string) GoogleOption {
+	return func(p *GoogleProvider) {
+		p.scopes = scopes
+	}
+}
+
 // NewGoogleProvider creates a Google OAuth provider.
-func NewGoogleProvider(clientID, clientSecret string) *GoogleProvider {
-	return &GoogleProvider{
+func NewGoogleProvider(clientID, clientSecret string, opts ...GoogleOption) *GoogleProvider {
+	p := &GoogleProvider{
 		BaseOAuthProvider{
 			name:         "google",
 			clientID:     clientID,
@@ -148,6 +161,10 @@ func NewGoogleProvider(clientID, clientSecret string) *GoogleProvider {
 			userParser:   parseGoogleUser,
 		},
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func parseGoogleUser(data []byte) (*OAuthUser, error) {
@@ -182,9 +199,20 @@ type DiscordProvider struct {
 	BaseOAuthProvider
 }
 
+// DiscordOption configures a DiscordProvider.
+type DiscordOption func(*DiscordProvider)
+
+// WithDiscordScopes sets custom scopes for Discord OAuth.
+// Default scopes are "identify" and "email".
+func WithDiscordScopes(scopes ...string) DiscordOption {
+	return func(p *DiscordProvider) {
+		p.scopes = scopes
+	}
+}
+
 // NewDiscordProvider creates a Discord OAuth provider.
-func NewDiscordProvider(clientID, clientSecret string) *DiscordProvider {
-	return &DiscordProvider{
+func NewDiscordProvider(clientID, clientSecret string, opts ...DiscordOption) *DiscordProvider {
+	p := &DiscordProvider{
 		BaseOAuthProvider{
 			name:         "discord",
 			clientID:     clientID,
@@ -196,6 +224,10 @@ func NewDiscordProvider(clientID, clientSecret string) *DiscordProvider {
 			userParser:   parseDiscordUser,
 		},
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func parseDiscordUser(data []byte) (*OAuthUser, error) {
@@ -228,6 +260,57 @@ func parseDiscordUser(data []byte) (*OAuthUser, error) {
 	}, nil
 }
 
+// ExchangeCode exchanges an authorization code for tokens using HTTP Basic Auth.
+// Discord requires client credentials via HTTP Basic Auth, not form-encoded.
+func (p *DiscordProvider) ExchangeCode(ctx context.Context, code, redirectURL string) (*OAuthTokens, error) {
+	data := url.Values{}
+	data.Set("grant_type", "authorization_code")
+	data.Set("code", code)
+	data.Set("redirect_uri", redirectURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "GoAuth/1.0")
+	req.SetBasicAuth(p.clientID, p.clientSecret)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("discord token exchange failed: %s", string(body))
+	}
+
+	var tokens struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		TokenType    string `json:"token_type"`
+	}
+	if err := json.Unmarshal(body, &tokens); err != nil {
+		return nil, err
+	}
+
+	return &OAuthTokens{
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		ExpiresIn:    tokens.ExpiresIn,
+		TokenType:    tokens.TokenType,
+	}, nil
+}
+
 // ==================== GITHUB ====================
 
 // GitHubProvider implements OAuth for GitHub.
@@ -235,9 +318,20 @@ type GitHubProvider struct {
 	BaseOAuthProvider
 }
 
+// GitHubOption configures a GitHubProvider.
+type GitHubOption func(*GitHubProvider)
+
+// WithGitHubScopes sets custom scopes for GitHub OAuth.
+// Default scope is "user:email".
+func WithGitHubScopes(scopes ...string) GitHubOption {
+	return func(p *GitHubProvider) {
+		p.scopes = scopes
+	}
+}
+
 // NewGitHubProvider creates a GitHub OAuth provider.
-func NewGitHubProvider(clientID, clientSecret string) *GitHubProvider {
-	return &GitHubProvider{
+func NewGitHubProvider(clientID, clientSecret string, opts ...GitHubOption) *GitHubProvider {
+	p := &GitHubProvider{
 		BaseOAuthProvider{
 			name:         "github",
 			clientID:     clientID,
@@ -249,6 +343,10 @@ func NewGitHubProvider(clientID, clientSecret string) *GitHubProvider {
 			userParser:   parseGitHubUser,
 		},
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func parseGitHubUser(data []byte) (*OAuthUser, error) {

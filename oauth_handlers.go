@@ -65,25 +65,22 @@ func (s *AuthService) handleOAuthCallback(name string, provider OAuthProvider) h
 
 		// Clear state cookie
 		http.SetCookie(w, &http.Cookie{
-			Name:   "oauth_state",
-			Value:  "",
-			Path:   "/",
-			MaxAge: -1,
+			Name:     "oauth_state",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1, // Expire immediately
+			HttpOnly: true,
+			Secure:   s.isRequestSecure(r),
+			SameSite: http.SameSiteLaxMode,
 		})
 
-		// Check for error from provider
-		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
-			errDesc := r.URL.Query().Get("error_description")
-			writeError(w, http.StatusBadRequest, "OAUTH_ERROR", errMsg+": "+errDesc)
-			return
-		}
-
-		// Get authorization code
+		// Exchange code for token
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			writeError(w, http.StatusBadRequest, CodeBadRequest, "missing code")
 			return
 		}
+
 
 		// Build callback URL
 		callbackURL := s.oauthCallbackURL(name)
@@ -102,6 +99,13 @@ func (s *AuthService) handleOAuthCallback(name string, provider OAuthProvider) h
 			s.logger.Error("oauth get user failed", zap.Error(err), zap.String("provider", name))
 			writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to get user info")
 			return
+		}
+
+		// HOOK: Check if success handler is defined (e.g., for testing)
+		if s.config.OAuthSuccessHandler != nil {
+			if s.config.OAuthSuccessHandler(w, r, name, oauthUser, tokens) {
+				return
+			}
 		}
 
 		// Find or create user

@@ -183,22 +183,26 @@ type Config struct {
 	CaptchaOnMagicLink bool
 
 	// ==================== WEBAUTHN ====================
-	WebAuthnEnabled bool
 	WebAuthn        WebAuthnConfig
+	WebAuthnEnabled bool
+	AllowRememberMe bool
+	MaxDevices      int // 0 = unlimited
 
-	// ==================== CLIENT TYPES ====================
-	// Configure behavior for different client types
+	// ==================== DEBUG / HOOKS ====================
+	OAuthSuccessHandler func(w http.ResponseWriter, r *http.Request, provider string, user *OAuthUser, tokens *OAuthTokens) bool
+
+	// ==================== CLIENT CONFIGS ====================
 	WebClientConfig    ClientConfig
 	MobileClientConfig ClientConfig
 	APIClientConfig    ClientConfig
 }
 
-// ClientConfig holds configuration specific to client types.
+// ClientConfig holds configuration for specific client types.
 type ClientConfig struct {
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 	AllowRememberMe bool
-	MaxDevices      int // 0 = unlimited
+	MaxDevices      int
 }
 
 // IPPrivacyConfig controls how IP addresses are stored.

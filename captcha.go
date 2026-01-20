@@ -194,7 +194,7 @@ type HCaptchaProvider struct {
 func NewHCaptcha(secret string) *HCaptchaProvider {
 	return &HCaptchaProvider{
 		secret:    secret,
-		verifyURL: "https://hcaptcha.com/siteverify",
+		verifyURL: "https://api.hcaptcha.com/siteverify",
 		client:    &http.Client{Timeout: 10 * time.Second},
 	}
 }

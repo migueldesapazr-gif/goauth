@@ -2,6 +2,7 @@ package goauth
 
 import (
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -11,7 +12,7 @@ import (
 	"github.com/migueldesapazr-gif/goauth/mailers/mailgun"
 	"github.com/migueldesapazr-gif/goauth/mailers/resend"
 	"github.com/migueldesapazr-gif/goauth/mailers/sendgrid"
-	"github.com/migueldesapazr-gif/goauth/mailers/smtp"
+	smtpmailer "github.com/migueldesapazr-gif/goauth/mailers/smtp"
 	redislimiter "github.com/migueldesapazr-gif/goauth/ratelimit/redis"
 )
 
@@ -22,11 +23,11 @@ func setOptionalStores(s *AuthService, store Store) {
 	if store == nil {
 		return
 	}
-	if provider, ok := store.(ProfileProvider); ok {
-		s.profileStore = provider.Profiles()
-	} else if ps, ok := store.(ProfileStore); ok {
-		s.profileStore = ps
+	if s.store == nil {
+		s.store = store
+		return
 	}
+	// Add other storage checks here if needed
 }
 
 // ==================== REQUIRED ====================
@@ -118,9 +119,9 @@ func WithResend(apiKey, fromEmail, fromName string) Option {
 }
 
 // WithSMTP sets up SMTP email provider.
-func WithSMTP(cfg smtp.Config) Option {
+func WithSMTP(cfg smtpmailer.Config) Option {
 	return func(s *AuthService) error {
-		s.mailer = smtp.New(cfg)
+		s.mailer = smtpmailer.New(cfg)
 		return nil
 	}
 }
@@ -203,6 +204,14 @@ func WithTwitch(clientID, clientSecret string) Option {
 func WithOAuth(provider OAuthProvider) Option {
 	return func(s *AuthService) error {
 		s.oauth[provider.Name()] = provider
+		return nil
+	}
+}
+
+// WithOAuthSuccessHandler sets a custom handler for successful OAuth authentication.
+func WithOAuthSuccessHandler(handler func(http.ResponseWriter, *http.Request, string, *OAuthUser, *OAuthTokens) bool) Option {
+	return func(s *AuthService) error {
+		s.config.OAuthSuccessHandler = handler
 		return nil
 	}
 }

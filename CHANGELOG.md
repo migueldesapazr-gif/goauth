@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-01-20
+
+### Fixed
+- **Discord OAuth**: Token exchange now uses HTTP Basic Auth per official Discord API docs
+- **hCaptcha**: Fixed verification endpoint URL (`api.hcaptcha.com/siteverify`)
+
+### Added
+- **OAuth Scope Customization**: All providers now support custom scopes via option patterns:
+  - `WithGoogleScopes(scopes ...string)` for Google OAuth
+  - `WithDiscordScopes(scopes ...string)` for Discord OAuth
+  - `WithGitHubScopes(scopes ...string)` for GitHub OAuth
+- `User-Agent` header added to all OAuth API requests for better compatibility
+- PostgreSQL schema file (`schema/postgres.sql`) for easy database initialization
+
+### Changed
+- OAuth provider constructors now accept variadic options for scope configuration:
+  - `NewGoogleProvider(clientID, secret, opts...)` 
+  - `NewDiscordProvider(clientID, secret, opts...)`
+  - `NewGitHubProvider(clientID, secret, opts...)`
+
 ## [1.1.0] - 2026-01-19
 
 ### Changed
