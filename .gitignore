@@ -45,11 +45,8 @@ yarn-error.log*
 *.pem
 *.key
 
-# Lab test data
-labtest/data/
-labtest/*.db
-labtest/*.sqlite
-labtest/test_output/
+# Lab test directory (separate from library)
+labtest/
 
 # Docker volumes
 docker-data/
