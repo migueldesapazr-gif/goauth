@@ -32,18 +32,12 @@ func (s *AuthService) handleOAuthRedirect(name string, provider OAuthProvider) h
 			Path:     "/",
 			MaxAge:   600, // 10 minutes
 			HttpOnly: true,
-			Secure:   r.TLS != nil,
+			Secure:   s.isRequestSecure(r),
 			SameSite: http.SameSiteLaxMode,
 		})
 
 		// Build callback URL
-		callbackURL := s.config.AppBaseURL + "/auth/" + name + "/callback"
-		if s.config.CallbackPath != "" {
-			callbackURL = s.config.AppBaseURL + s.config.CallbackPath + "/" + name
-		}
-		if s.config.CallbackPath != "" {
-			callbackURL = s.config.AppBaseURL + s.config.CallbackPath + "/" + name
-		}
+		callbackURL := s.oauthCallbackURL(name)
 
 		// Redirect to provider
 		authURL := provider.AuthURL(state, callbackURL)
@@ -92,7 +86,7 @@ func (s *AuthService) handleOAuthCallback(name string, provider OAuthProvider) h
 		}
 
 		// Build callback URL
-		callbackURL := s.config.AppBaseURL + "/auth/" + name + "/callback"
+		callbackURL := s.oauthCallbackURL(name)
 
 		// Exchange code for tokens
 		tokens, err := provider.ExchangeCode(ctx, code, callbackURL)
@@ -299,6 +293,15 @@ func (s *AuthService) findOrCreateOAuthUser(ctx context.Context, provider string
 		_ = oauthStore.LinkOAuthConnection(ctx, userID, provider, oauthUser.ID)
 	}
 	return &newUser, true, nil
+}
+
+func (s *AuthService) oauthCallbackURL(provider string) string {
+	base := strings.TrimRight(s.config.AppBaseURL, "/")
+	if s.config.CallbackPath != "" {
+		path := "/" + strings.Trim(s.config.CallbackPath, "/")
+		return base + path + "/" + provider + "/callback"
+	}
+	return base + "/auth/" + provider + "/callback"
 }
 
 // generateState generates a random state token for OAuth.

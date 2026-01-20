@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
 )
 
 // Store implements goauth.Store for SQL databases (MySQL/SQLite).

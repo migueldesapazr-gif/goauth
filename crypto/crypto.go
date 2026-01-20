@@ -11,6 +11,7 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -147,6 +148,13 @@ func HashToken(input string) []byte {
 	return sum[:]
 }
 
+// HashTokenWithPepper hashes a token using HMAC-SHA256 with a pepper.
+func HashTokenWithPepper(input string, pepper []byte) []byte {
+	h := hmac.New(sha256.New, pepper)
+	h.Write([]byte(input))
+	return h.Sum(nil)
+}
+
 // HashHex hashes input with SHA-256 and returns hex string.
 func HashHex(input []byte) string {
 	sum := sha256.Sum256(input)
@@ -199,8 +207,8 @@ func RandomBytes(size int) ([]byte, error) {
 
 // RandomCode generates a random numeric code of the specified length.
 func RandomCode(length int) (string, error) {
-	if length < 1 || length > 10 {
-		return "", errors.New("code length must be between 1 and 10")
+	if length < 1 || length > 32 {
+		return "", errors.New("code length must be between 1 and 32")
 	}
 
 	const digits = "0123456789"
@@ -211,6 +219,24 @@ func RandomCode(length int) (string, error) {
 
 	for i := range b {
 		b[i] = digits[int(b[i])%len(digits)]
+	}
+	return string(b), nil
+}
+
+// RandomString generates a random string from the provided alphabet.
+func RandomString(length int, alphabet string) (string, error) {
+	if length < 1 {
+		return "", errors.New("length must be positive")
+	}
+	if len(alphabet) < 2 {
+		return "", errors.New("alphabet must have at least 2 characters")
+	}
+	b := make([]byte, length)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
 	}
 	return string(b), nil
 }

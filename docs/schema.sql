@@ -241,6 +241,36 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
 CREATE INDEX idx_oauth_user ON oauth_connections(user_id);
 CREATE INDEX idx_oauth_provider ON oauth_connections(provider, provider_user_id);
 
+-- ==================== WEBAUTHN/PASSKEYS ====================
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BYTEA NOT NULL UNIQUE,
+    public_key BYTEA NOT NULL,
+    attestation_type VARCHAR(32) NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    aaguid BYTEA,
+    name VARCHAR(64),
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_webauthn_creds_user ON webauthn_credentials(user_id);
+CREATE UNIQUE INDEX idx_webauthn_creds_id ON webauthn_credentials(credential_id);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    challenge BYTEA NOT NULL UNIQUE,
+    user_id UUID,
+    type VARCHAR(32) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_webauthn_challenges ON webauthn_challenges(challenge);
+CREATE INDEX idx_webauthn_challenges_expires ON webauthn_challenges(expires_at);
+
 -- ==================== TENANTS (MULTI-TENANT) ====================
 
 CREATE TABLE IF NOT EXISTS tenants (

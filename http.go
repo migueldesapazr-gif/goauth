@@ -99,7 +99,9 @@ type twoFAVerifyRequest struct {
 }
 
 type twoFADisableRequest struct {
-	Password string `json:"password"`
+	Password   string `json:"password,omitempty"`
+	TOTPCode   string `json:"totp_code,omitempty"`
+	BackupCode string `json:"backup_code,omitempty"`
 }
 
 type emailChangeRequest struct {

@@ -288,7 +288,11 @@ func (s *AuthService) handleMagicLinkVerify(w http.ResponseWriter, r *http.Reque
 
 	// Mark as used
 	ipEnc, ipNonce, _ := s.encryptIP(s.clientIP(r))
-	ml.MarkMagicLinkUsed(ctx, magicToken.ID, ipEnc, ipNonce)
+	if err := ml.MarkMagicLinkUsed(ctx, magicToken.ID, ipEnc, ipNonce); err != nil {
+		s.logger.Error("mark magic link used error", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
+	}
 
 	// Get user and issue tokens
 	user, err := s.store.Users().GetUserByID(ctx, magicToken.UserID)
@@ -334,7 +338,7 @@ func (s *AuthService) handleMagicLinkVerify(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ipEnc, ipNonce, _ := s.encryptIP(s.clientIP(r))
+	ipEnc, ipNonce, _ = s.encryptIP(s.clientIP(r))
 	s.store.Users().UpdateLastLogin(ctx, user.ID, ipEnc, ipNonce)
 	s.logAudit(ctx, user.ID, "magic_link_login", r, nil)
 	s.CheckSuspiciousLogin(ctx, user, r)

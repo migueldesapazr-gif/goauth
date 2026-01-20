@@ -1,77 +1,23 @@
 # Environment Variables
 
-GoAuth can be configured through environment variables via `ConfigFromEnv()`.
+Use `ConfigFromEnv()` to load common options.
 
 ## Required Secrets
 
 ```env
-# 32 bytes each, base64 or hex
-GOAUTH_JWT_SECRET=your-jwt-secret
-GOAUTH_ENCRYPTION_KEY=your-encryption-key
-GOAUTH_PEPPER=your-pepper
+GOAUTH_JWT_SECRET=base64-32-bytes
+GOAUTH_ENCRYPTION_KEY=base64-32-bytes
+GOAUTH_PEPPER=base64-32-bytes
 ```
 
-Generate with:
-```bash
-openssl rand -base64 32
-```
-
-## Secrets Loading Options
-
-### .env File
-```go
-secrets, _ := goauth.SecretsFromEnvFile(".env")
-```
-
-### Raw File (3 lines)
-```go
-secrets, _ := goauth.SecretsFromRawFile("/run/secrets/goauth")
-```
-
-### Separate Files
-```go
-secrets, _ := goauth.SecretsFromFiles("jwt.key", "enc.key", "pepper.key")
-```
-
-### JSON File
-```go
-secrets, _ := goauth.SecretsFromJSONFile("secrets.json", map[string]string{
-    "jwt": "jwt_secret",
-    "encryption": "encryption_key",
-    "pepper": "pepper",
-})
-```
-
-### HashiCorp Vault
-```go
-secrets, _ := goauth.SecretsFromVaultEnv(ctx)
-```
-
-### AWS Secrets Manager / SSM
-```go
-secrets, _ := goauth.SecretsFromAWSSecretsManager(ctx, goauth.AWSSecretsConfig{
-    SecretName: "goauth/secrets",
-    Region:     "us-east-1",
-})
-```
-
-```go
-secrets, _ := goauth.SecretsFromAWSSSM(ctx, goauth.AWSSSMConfig{
-    JWTParameter:        "/goauth/jwt",
-    EncryptionParameter: "/goauth/encryption",
-    PepperParameter:     "/goauth/pepper",
-    Region:              "us-east-1",
-})
-```
-
-## App Configuration
+## App
 
 ```env
-GOAUTH_APP_NAME=My Application
+GOAUTH_APP_NAME=My App
 GOAUTH_APP_URL=https://myapp.com
-GOAUTH_SECURITY_MODE=balanced   # permissive|balanced|strict
+GOAUTH_CALLBACK_PATH=/auth
+GOAUTH_SECURITY_MODE=balanced
 ```
-Security mode sets a preset baseline and can be overridden by the flags below.
 
 ## Feature Toggles
 
@@ -83,7 +29,7 @@ GOAUTH_PASSWORD_RESET_ENABLED=true
 GOAUTH_MAGIC_LINKS_ENABLED=false
 GOAUTH_EMAIL_DOMAIN_CHECK=true
 GOAUTH_BLOCK_DISPOSABLE_EMAILS=true
-GOAUTH_DISPOSABLE_EMAIL_DOMAINS=mailinator.com,10minutemail.com   # enables blocking if not set above
+GOAUTH_DISPOSABLE_EMAIL_DOMAINS=mailinator.com,10minutemail.com
 ```
 
 ## Username
@@ -93,6 +39,9 @@ GOAUTH_USERNAME_ENABLED=true
 GOAUTH_USERNAME_REQUIRED=false
 GOAUTH_USERNAME_MIN=3
 GOAUTH_USERNAME_MAX=32
+GOAUTH_USERNAME_PATTERN=^[a-z0-9._-]+$
+GOAUTH_USERNAME_RESERVED=admin,support,root
+GOAUTH_USERNAME_ALLOW_NUMERIC_ONLY=false
 ```
 
 ## Password Policy + Lockout
@@ -105,12 +54,26 @@ GOAUTH_MAX_LOGIN_ATTEMPTS=5
 GOAUTH_LOCKOUT_DURATION=15m
 ```
 
+## 2FA and Backup Codes
+
+```env
+GOAUTH_TOTP_DIGITS=6
+GOAUTH_TOTP_ACCOUNT_NAME=My App
+GOAUTH_TOTP_USE_USERNAME=true
+GOAUTH_TOTP_QR_ENABLED=true
+GOAUTH_TOTP_QR_SIZE=256
+
+GOAUTH_BACKUP_CODE_LENGTH=8
+GOAUTH_BACKUP_CODE_DIGITS_ONLY=true
+GOAUTH_BACKUP_CODE_COUNT=10
+```
+
 ## Route Requirements
 
 ```env
 GOAUTH_REQUIRE_VERIFIED_EMAIL_FOR_AUTH=true
 GOAUTH_REQUIRE_2FA_FOR_AUTH=false
-GOAUTH_REQUIRE_2FA_FOR_OAUTH=false
+GOAUTH_REQUIRE_2FA_FOR_OAUTH=true
 GOAUTH_REQUIRE_2FA_FOR_MAGIC_LINK=false
 GOAUTH_REQUIRE_2FA_FOR_SDK=false
 GOAUTH_REQUIRE_2FA_FOR_EMAIL_CHANGE=true
@@ -159,6 +122,13 @@ GOAUTH_UNVERIFIED_ACCOUNT_TTL=24h
 GOAUTH_USER_AGENT_HASH=true
 ```
 
+## Passkeys
+
+```env
+GOAUTH_PASSKEYS_MAX_PER_USER=5
+GOAUTH_PASSKEYS_ALLOWED_ROLES=user,admin
+```
+
 ## Notifications
 
 ```env
@@ -185,43 +155,8 @@ GOAUTH_MICROSOFT_CLIENT_SECRET=xxx
 
 ## Email Providers
 
-Choose a provider with `GOAUTH_EMAIL_PROVIDER` or set only one provider's variables.
-
 ```env
 GOAUTH_EMAIL_PROVIDER=resend   # resend|sendgrid|mailgun|smtp
-```
-
-Resend:
-```env
-GOAUTH_RESEND_API_KEY=re_xxx
-GOAUTH_RESEND_FROM_EMAIL=noreply@myapp.com
-GOAUTH_RESEND_FROM_NAME=My App
-```
-
-SendGrid:
-```env
-GOAUTH_SENDGRID_API_KEY=SG.xxx
-GOAUTH_SENDGRID_FROM_EMAIL=noreply@myapp.com
-GOAUTH_SENDGRID_FROM_NAME=My App
-```
-
-Mailgun:
-```env
-GOAUTH_MAILGUN_API_KEY=key-xxx
-GOAUTH_MAILGUN_DOMAIN=mg.myapp.com
-GOAUTH_MAILGUN_FROM_EMAIL=noreply@myapp.com
-GOAUTH_MAILGUN_FROM_NAME=My App
-```
-
-SMTP:
-```env
-GOAUTH_SMTP_HOST=smtp.myapp.com
-GOAUTH_SMTP_PORT=465
-GOAUTH_SMTP_USERNAME=user
-GOAUTH_SMTP_PASSWORD=pass
-GOAUTH_SMTP_FROM_EMAIL=noreply@myapp.com
-GOAUTH_SMTP_FROM_NAME=My App
-GOAUTH_SMTP_TLS=true
 ```
 
 ## CAPTCHA
@@ -239,7 +174,7 @@ GOAUTH_CAPTCHA_ON_REGISTER=true
 GOAUTH_CAPTCHA_ON_LOGIN=true
 GOAUTH_CAPTCHA_ON_PASSWORD_RESET=true
 GOAUTH_CAPTCHA_ON_MAGIC_LINK=false
-GOAUTH_CAPTCHA_FAIL_OPEN=true
+GOAUTH_CAPTCHA_FAIL_OPEN=false
 ```
 
 ## HIBP
@@ -256,12 +191,12 @@ GOAUTH_TRUST_PROXY_HEADERS=true
 GOAUTH_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
 ```
 
-## Using in Code
+## Usage
 
 ```go
 auth, _ := goauth.New(
     goauth.WithDatabase(db),
     goauth.WithSecretsFromEnv(),
-    goauth.ConfigFromEnv()..., // OAuth, email, captcha, security settings
+    goauth.ConfigFromEnv()...,
 )
 ```

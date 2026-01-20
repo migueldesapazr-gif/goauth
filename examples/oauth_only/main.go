@@ -12,7 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
+	"github.com/migueldesapazr-gif/goauth/stores/postgres"
 )
 
 func main() {
@@ -24,7 +25,7 @@ func main() {
 
 	// OAuth-only configuration
 	auth, err := goauth.New(
-		goauth.WithDatabase(db),
+		postgres.WithDatabase(db),
 		goauth.WithSecretsFromEnv(),
 
 		// Disable email/password

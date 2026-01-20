@@ -1,6 +1,9 @@
 package goauth
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Configuration errors.
 var (
@@ -8,6 +11,8 @@ var (
 	ErrInvalidMEK       = errors.New("goauth: MEK (Master Encryption Key) must be exactly 32 bytes")
 	ErrInvalidPepper    = errors.New("goauth: pepper must be exactly 32 bytes")
 	ErrInvalidSecretLength = errors.New("goauth: secrets must be exactly 32 bytes")
+	ErrStoreNotConfigured = errors.New("goauth: store is required but not configured")
+	ErrMailerNotConfigured = errors.New("goauth: mailer is required for this operation but not configured")
 )
 
 // Authentication errors - these are safe to show to users.
@@ -36,6 +41,11 @@ var (
 	ErrRateLimited           = errors.New("rate limit exceeded, please try again later")
 	ErrProfileNotFound       = errors.New("profile not found")
 	ErrIPBlocked             = errors.New("ip temporarily blocked")
+	ErrPasskeyLimitReached   = errors.New("maximum number of passkeys reached")
+	ErrPasskeyNotAllowed     = errors.New("passkey registration not allowed for this role")
+	ErrInvalidPasskey        = errors.New("invalid passkey")
+	ErrMagicLinkExpired      = errors.New("magic link has expired")
+	ErrMagicLinkUsed         = errors.New("magic link has already been used")
 )
 
 // Internal errors - these should be logged but not shown to users.
@@ -44,6 +54,7 @@ var (
 	ErrDatabaseError    = errors.New("database error")
 	ErrEncryptionError  = errors.New("encryption error")
 	ErrEmailSendError   = errors.New("failed to send email")
+	ErrCaptchaService   = errors.New("captcha service error")
 )
 
 // AuthError wraps an error with additional context for API responses.
@@ -65,6 +76,15 @@ func (e *AuthError) Error() string {
 
 func (e *AuthError) Unwrap() error {
 	return e.Internal
+}
+
+// Is implements errors.Is for AuthError comparison.
+func (e *AuthError) Is(target error) bool {
+	t, ok := target.(*AuthError)
+	if !ok {
+		return false
+	}
+	return e.Code == t.Code
 }
 
 // Error codes for API responses.
@@ -94,6 +114,11 @@ const (
 	CodeIPBlocked            = "IP_BLOCKED"
 	CodeInternalError        = "INTERNAL_ERROR"
 	CodeBadRequest           = "BAD_REQUEST"
+	CodePasskeyLimit         = "PASSKEY_LIMIT_REACHED"
+	CodePasskeyNotAllowed    = "PASSKEY_NOT_ALLOWED"
+	CodeInvalidPasskey       = "INVALID_PASSKEY"
+	CodeMagicLinkExpired     = "MAGIC_LINK_EXPIRED"
+	CodeMagicLinkUsed        = "MAGIC_LINK_USED"
 )
 
 // newAuthError creates a new AuthError.
@@ -103,4 +128,22 @@ func newAuthError(code string, message string, internal error) *AuthError {
 		Message:  message,
 		Internal: internal,
 	}
+}
+
+// wrapError wraps an error with additional context.
+// Use this for internal error wrapping with context.
+func wrapError(err error, context string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", context, err)
+}
+
+// isNotFoundError checks if an error indicates a "not found" condition.
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return msg == "user not found" || msg == "token not found" || msg == "profile not found"
 }

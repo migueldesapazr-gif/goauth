@@ -176,6 +176,20 @@ func (s *AuthService) clientIP(r *http.Request) string {
 		return remoteIP
 	}
 
+	cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))
+	if cf != "" && net.ParseIP(cf) != nil {
+		return cf
+	}
+	tci := strings.TrimSpace(r.Header.Get("True-Client-IP"))
+	if tci != "" && net.ParseIP(tci) != nil {
+		return tci
+	}
+	if forwarded := r.Header.Get("Forwarded"); forwarded != "" {
+		if ip := parseForwardedFor(forwarded, s.isTrustedProxy); ip != "" {
+			return ip
+		}
+	}
+
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
 		parts := strings.Split(xff, ",")
@@ -203,6 +217,33 @@ func (s *AuthService) clientIP(r *http.Request) string {
 	}
 
 	return remoteIP
+}
+
+func (s *AuthService) isRequestSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !s.config.TrustProxyHeaders {
+		return false
+	}
+	remoteIP := parseIPFromAddr(r.RemoteAddr)
+	if remoteIP == "" || !s.isTrustedProxy(remoteIP) {
+		return false
+	}
+	if proto := firstForwardedProto(r.Header.Get("X-Forwarded-Proto")); strings.EqualFold(proto, "https") {
+		return true
+	}
+	if proto := firstForwardedProto(r.Header.Get("X-Forwarded-Scheme")); strings.EqualFold(proto, "https") {
+		return true
+	}
+	if proto := parseForwardedProto(r.Header.Get("Forwarded")); strings.EqualFold(proto, "https") {
+		return true
+	}
+	cfVisitor := strings.ToLower(strings.TrimSpace(r.Header.Get("CF-Visitor")))
+	if strings.Contains(cfVisitor, "\"scheme\":\"https\"") {
+		return true
+	}
+	return false
 }
 
 func (s *AuthService) isTrustedProxy(ip string) bool {
@@ -233,6 +274,77 @@ func parseIPFromAddr(addr string) string {
 		return strings.TrimPrefix(strings.SplitN(addr, "]", 2)[0], "[")
 	}
 	return addr
+}
+
+func parseForwardedFor(header string, isTrusted func(string) bool) string {
+	if header == "" {
+		return ""
+	}
+	var ips []string
+	parts := strings.Split(header, ",")
+	for _, part := range parts {
+		params := strings.Split(part, ";")
+		for _, param := range params {
+			param = strings.TrimSpace(param)
+			if len(param) < 4 || strings.ToLower(param[:4]) != "for=" {
+				continue
+			}
+			val := strings.TrimSpace(param[4:])
+			val = strings.Trim(val, "\"")
+			if strings.EqualFold(val, "unknown") || val == "" {
+				continue
+			}
+			if strings.HasPrefix(val, "[") && strings.Contains(val, "]") {
+				val = strings.TrimPrefix(val, "[")
+				val = strings.SplitN(val, "]", 2)[0]
+			}
+			if host, _, err := net.SplitHostPort(val); err == nil {
+				val = host
+			}
+			if net.ParseIP(val) == nil {
+				continue
+			}
+			ips = append(ips, val)
+		}
+	}
+	if len(ips) == 0 {
+		return ""
+	}
+	for i := len(ips) - 1; i >= 0; i-- {
+		if !isTrusted(ips[i]) {
+			return ips[i]
+		}
+	}
+	return ips[0]
+}
+
+func parseForwardedProto(header string) string {
+	if header == "" {
+		return ""
+	}
+	parts := strings.Split(header, ",")
+	for _, part := range parts {
+		params := strings.Split(part, ";")
+		for _, param := range params {
+			param = strings.TrimSpace(param)
+			if len(param) < 6 || strings.ToLower(param[:6]) != "proto=" {
+				continue
+			}
+			value := strings.Trim(strings.TrimSpace(param[6:]), "\"")
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func firstForwardedProto(header string) string {
+	if header == "" {
+		return ""
+	}
+	parts := strings.Split(header, ",")
+	return strings.TrimSpace(parts[0])
 }
 
 // hashIP hashes an IP address for privacy-preserving logging.

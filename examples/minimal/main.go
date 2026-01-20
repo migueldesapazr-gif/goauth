@@ -13,7 +13,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
+	"github.com/migueldesapazr-gif/goauth/stores/postgres"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 
 	// Create auth service - minimal config!
 	auth, err := goauth.New(
-		goauth.WithDatabase(db),
+		postgres.WithDatabase(db),
 		goauth.WithSecretsFromEnv(), // Reads GOAUTH_JWT_SECRET, GOAUTH_ENCRYPTION_KEY, GOAUTH_PEPPER
 	)
 	if err != nil {

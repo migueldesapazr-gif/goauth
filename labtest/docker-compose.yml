@@ -1,0 +1,103 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: goauth-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: goauth
+      POSTGRES_PASSWORD: goauth_secret
+      POSTGRES_DB: goauth_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goauth"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (for rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: goauth-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Cloudflare Tunnel
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: goauth-tunnel
+    restart: unless-stopped
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - server
+
+  # GoAuth Test Server
+  server:
+    build: .
+    container_name: goauth-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # App Config
+      PORT: 8080
+      TEST_APP_URL: ${TEST_APP_URL}
+      GOAUTH_APP_NAME: ${GOAUTH_APP_NAME}
+      
+      # Database (connects to postgres service)
+      DATABASE_URL: postgres://goauth:goauth_secret@postgres:5432/goauth_test?sslmode=disable
+      
+      # Secrets
+      GOAUTH_JWT_SECRET: ${GOAUTH_JWT_SECRET}
+      GOAUTH_ENCRYPTION_KEY: ${GOAUTH_ENCRYPTION_KEY}
+      GOAUTH_PEPPER: ${GOAUTH_PEPPER}
+      
+      # CAPTCHA
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
+      RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY}
+      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY}
+      HCAPTCHA_SITE_KEY: ${HCAPTCHA_SITE_KEY}
+      HCAPTCHA_SECRET_KEY: ${HCAPTCHA_SECRET_KEY}
+      
+      # OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      
+      # Email
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: goauth-network

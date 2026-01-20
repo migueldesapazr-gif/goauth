@@ -15,7 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
 )
 
 // Store implements goauth.Store for MongoDB.

@@ -1,6 +1,7 @@
 package goauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -8,12 +9,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	"github.com/google/uuid"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
@@ -263,7 +268,7 @@ func (s *AuthService) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user *User
-	var err error
+
 	if strings.Contains(identifier, "@") {
 		email := strings.ToLower(identifier)
 		emailHash := crypto.HashWithPepper(email, s.pepper)
@@ -672,8 +677,16 @@ func (s *AuthService) issueTokens(ctx context.Context, user *User, r *http.Reque
 func (s *AuthService) verifyTOTPOrBackup(ctx context.Context, user *User, totpCode, backupCode string) (bool, bool, error) {
 	// Try backup code first if provided
 	if backupCode != "" {
-		codeHash := crypto.HashToken(backupCode)
+		codeHash := s.hashBackupCode(backupCode)
 		used, err := s.store.Users().UseBackupCode(ctx, user.ID, codeHash)
+		if err != nil {
+			return false, false, err
+		}
+		if used {
+			return true, true, nil
+		}
+		legacyHash := crypto.HashToken(backupCode)
+		used, err = s.store.Users().UseBackupCode(ctx, user.ID, legacyHash)
 		if err != nil {
 			return false, false, err
 		}
@@ -691,11 +704,11 @@ func (s *AuthService) verifyTOTPOrBackup(ctx context.Context, user *User, totpCo
 		return false, false, err
 	}
 
-	// Use ValidateCustom with time skew tolerance for clock drift (±1 step = 30 seconds)
+	// Use ValidateCustom with time skew tolerance for clock drift (+/-1 step = 30 seconds)
 	valid, err := totp.ValidateCustom(totpCode, string(secret), time.Now(), totp.ValidateOpts{
 		Period:    30,
-		Skew:      1, // Allow ±30 seconds for clock drift
-		Digits:    otp.DigitsSix,
+		Skew:      1, // Allow +/-30 seconds for clock drift
+		Digits:    s.totpDigits(),
 		Algorithm: otp.AlgorithmSHA1,
 	})
 	if err != nil {
@@ -1115,12 +1128,20 @@ func (s *AuthService) handleTwoFASetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	accountName := string(email)
+	if s.config.TOTPAccountName != "" {
+		accountName = s.config.TOTPAccountName
+	} else if s.config.TOTPUseUsername && user.Username != "" {
+		accountName = user.Username
+	}
+
 	// Generate TOTP secret
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      s.config.AppName,
-		AccountName: string(email),
+		AccountName: accountName,
 		SecretSize:  32,
 		Algorithm:   otp.AlgorithmSHA1,
+		Digits:      s.totpDigits(),
 	})
 	if err != nil {
 		s.logger.Error("totp generate error", zap.Error(err))
@@ -1143,11 +1164,25 @@ func (s *AuthService) handleTwoFASetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"secret":   key.Secret(),
-		"url":      key.URL(),
-		"message":  "scan the QR code and then verify with a code",
-	})
+	resp := map[string]any{
+		"secret":       key.Secret(),
+		"url":          key.URL(),
+		"issuer":       s.config.AppName,
+		"account_name": accountName,
+		"digits":       s.totpDigitsInt(),
+		"message":      "scan the QR code and then verify with a code",
+	}
+	if s.config.TOTPQRCodeEnabled {
+		pngB64, dataURL, err := s.buildTOTPQRCode(key.URL())
+		if err != nil {
+			s.logger.Warn("qr code generation failed", zap.Error(err))
+		} else {
+			resp["qr_code_png"] = pngB64
+			resp["qr_code_data_url"] = dataURL
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *AuthService) handleTwoFAVerify(w http.ResponseWriter, r *http.Request) {
@@ -1180,7 +1215,18 @@ func (s *AuthService) handleTwoFAVerify(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !totp.Validate(req.Code, string(secret)) {
+	valid, err := totp.ValidateCustom(req.Code, string(secret), time.Now(), totp.ValidateOpts{
+		Period:    30,
+		Skew:      1,
+		Digits:    s.totpDigits(),
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	if err != nil {
+		s.logger.Error("totp verify error", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
+	}
+	if !valid {
 		writeError(w, http.StatusBadRequest, CodeInvalid2FACode, ErrInvalid2FACode.Error())
 		return
 	}
@@ -1192,17 +1238,19 @@ func (s *AuthService) handleTwoFAVerify(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Generate backup codes
-	backupCodes := make([]string, 10)
-	backupHashes := make([][]byte, 10)
-	for i := 0; i < 10; i++ {
-		code, _ := crypto.RandomToken(8)
-		backupCodes[i] = code
-		backupHashes[i] = crypto.HashToken(code)
+	backupCodes, backupHashes, err := s.generateBackupCodes()
+	if err != nil {
+		s.logger.Error("backup code generation error", zap.Error(err))
+		_ = s.store.Users().DisableTOTP(ctx, user.ID)
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
 	}
 
 	if err := s.store.Users().ReplaceBackupCodes(ctx, user.ID, backupHashes); err != nil {
 		s.logger.Error("save backup codes error", zap.Error(err))
+		_ = s.store.Users().DisableTOTP(ctx, user.ID)
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
 	}
 
 	s.logAudit(ctx, user.ID, Event2FAEnabled, r, nil)
@@ -1210,6 +1258,7 @@ func (s *AuthService) handleTwoFAVerify(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":      "2FA enabled successfully",
 		"backup_codes": backupCodes,
+		"backup_codes_count": len(backupCodes),
 		"warning":      "save these backup codes in a safe place",
 	})
 }
@@ -1229,10 +1278,26 @@ func (s *AuthService) handleTwoFADisable(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Verify password
-	if !crypto.VerifyPassword(req.Password, user.PasswordHash, user.PasswordSalt) {
-		writeError(w, http.StatusUnauthorized, CodeInvalidCredentials, ErrInvalidCredentials.Error())
-		return
+	// Verify password or a current factor
+	passwordOk := false
+	if req.Password != "" && crypto.VerifyPassword(req.Password, user.PasswordHash, user.PasswordSalt) {
+		passwordOk = true
+	}
+	if !passwordOk {
+		if req.TOTPCode == "" && req.BackupCode == "" {
+			writeError(w, http.StatusBadRequest, CodeBadRequest, "password or 2FA code required")
+			return
+		}
+		valid, _, err := s.verifyTOTPOrBackup(ctx, user, req.TOTPCode, req.BackupCode)
+		if err != nil {
+			s.logger.Error("totp verify error", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+			return
+		}
+		if !valid {
+			writeError(w, http.StatusUnauthorized, CodeInvalid2FACode, ErrInvalid2FACode.Error())
+			return
+		}
 	}
 
 	// Disable TOTP
@@ -1247,6 +1312,55 @@ func (s *AuthService) handleTwoFADisable(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "2FA disabled successfully",
 	})
+}
+
+func (s *AuthService) handleBackupCodesRegenerate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user, _ := GetUserFromContext(ctx)
+
+	if !user.TOTPEnabled {
+		writeError(w, http.StatusBadRequest, Code2FANotEnabled, Err2FANotEnabled.Error())
+		return
+	}
+
+	codes, err := s.regenerateBackupCodes(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("regenerate backup codes error", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
+	}
+
+	s.logAudit(ctx, user.ID, EventBackupCodesRegenerated, r, nil)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"backup_codes":       codes,
+		"backup_codes_count": len(codes),
+		"warning":            "save these backup codes in a safe place",
+	})
+}
+
+func (s *AuthService) handleBackupCodesDownload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user, _ := GetUserFromContext(ctx)
+
+	if !user.TOTPEnabled {
+		writeError(w, http.StatusBadRequest, Code2FANotEnabled, Err2FANotEnabled.Error())
+		return
+	}
+
+	codes, err := s.regenerateBackupCodes(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("regenerate backup codes error", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
+	}
+
+	s.logAudit(ctx, user.ID, EventBackupCodesRegenerated, r, nil)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"backup-codes.txt\"")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(strings.Join(codes, "\n") + "\n"))
 }
 
 // Helper for HIBP check (k-anonymity with SHA-1).
@@ -1339,6 +1453,10 @@ func (s *AuthService) validateUsername(username string) error {
 		return nil
 	}
 	normalized := normalizeUsername(username)
+	if strings.HasPrefix(normalized, ".") || strings.HasPrefix(normalized, "-") ||
+		strings.HasSuffix(normalized, ".") || strings.HasSuffix(normalized, "-") {
+		return fmt.Errorf("username cannot start or end with '.' or '-'")
+	}
 	minLen := s.config.MinUsernameLength
 	if minLen <= 0 {
 		minLen = 3
@@ -1355,6 +1473,32 @@ func (s *AuthService) validateUsername(username string) error {
 	}
 	if strings.Contains(normalized, "@") {
 		return fmt.Errorf("username cannot contain @")
+	}
+	if !s.config.UsernameAllowNumericOnly {
+		allDigits := true
+		for _, c := range normalized {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return fmt.Errorf("username cannot be only numbers")
+		}
+	}
+	for _, reserved := range s.config.UsernameReserved {
+		if normalizeUsername(reserved) == normalized {
+			return fmt.Errorf("username is reserved")
+		}
+	}
+	if s.config.UsernamePattern != "" {
+		re, err := regexp.Compile(s.config.UsernamePattern)
+		if err != nil {
+			return fmt.Errorf("username policy is invalid")
+		}
+		if !re.MatchString(normalized) {
+			return fmt.Errorf("username does not match policy")
+		}
 	}
 	for _, c := range normalized {
 		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' {
@@ -1374,6 +1518,7 @@ func (s *AuthService) generateAvailableUsername(ctx context.Context, base string
 		candidate = candidate[:at]
 	}
 	candidate = sanitizeUsername(candidate)
+	candidate = strings.Trim(candidate, ".-")
 	if candidate == "" {
 		candidate = "user"
 	}
@@ -1458,6 +1603,94 @@ func (s *AuthService) validatePassword(password string) error {
 		}
 	}
 	return nil
+}
+
+func (s *AuthService) totpDigits() otp.Digits {
+	if s.config.TOTPDigits == 8 {
+		return otp.DigitsEight
+	}
+	return otp.DigitsSix
+}
+
+func (s *AuthService) totpDigitsInt() int {
+	if s.config.TOTPDigits == 8 {
+		return 8
+	}
+	return 6
+}
+
+func (s *AuthService) buildTOTPQRCode(url string) (string, string, error) {
+	size := s.config.TOTPQRCodeSize
+	if size <= 0 {
+		size = 256
+	}
+	code, err := qr.Encode(url, qr.M, qr.Auto)
+	if err != nil {
+		return "", "", err
+	}
+	code, err = barcode.Scale(code, size, size)
+	if err != nil {
+		return "", "", err
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, code); err != nil {
+		return "", "", err
+	}
+	pngB64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	dataURL := "data:image/png;base64," + pngB64
+	return pngB64, dataURL, nil
+}
+
+func (s *AuthService) hashBackupCode(code string) []byte {
+	return crypto.HashTokenWithPepper(code, s.pepper)
+}
+
+func (s *AuthService) generateBackupCodes() ([]string, [][]byte, error) {
+	count := s.config.BackupCodeCount
+	if count <= 0 {
+		count = 10
+	}
+	length := s.config.BackupCodeLength
+	if length <= 0 {
+		length = 8
+	}
+	alphabet := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	digitsOnly := s.config.BackupCodeDigitsOnly
+
+	codes := make([]string, 0, count)
+	hashes := make([][]byte, 0, count)
+	seen := make(map[string]struct{}, count)
+	for len(codes) < count {
+		var code string
+		var err error
+		if digitsOnly {
+			code, err = crypto.RandomCode(length)
+		} else {
+			code, err = crypto.RandomString(length, alphabet)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+		hashes = append(hashes, s.hashBackupCode(code))
+	}
+
+	return codes, hashes, nil
+}
+
+func (s *AuthService) regenerateBackupCodes(ctx context.Context, userID string) ([]string, error) {
+	codes, hashes, err := s.generateBackupCodes()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.Users().ReplaceBackupCodes(ctx, userID, hashes); err != nil {
+		return nil, err
+	}
+	return codes, nil
 }
 
 // Base64 helpers

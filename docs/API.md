@@ -1,6 +1,10 @@
 # API Reference
 
-Complete API endpoint documentation.
+All paths below assume the handler is mounted at `/auth`:
+
+```go
+r.Mount("/auth", auth.Handler())
+```
 
 ## Authentication
 
@@ -11,23 +15,23 @@ POST /auth/register
 Content-Type: application/json
 
 {
-    "email": "user@example.com",
-    "password": "SecurePassword123!",
-    "username": "johndoe",           // optional
-    "captcha_token": "..."           // if CAPTCHA enabled
+  "email": "user@example.com",
+  "password": "SecurePassword123!",
+  "username": "johndoe",
+  "captcha_token": "..."
 }
 ```
 
-**Response:**
+Response:
 ```json
 {
-    "message": "registration successful",
-    "user_id": "uuid",
-    "email_verified": false
+  "user_id": "uuid",
+  "access_token": "eyJhbG...",
+  "email_masked": "u***@example.com",
+  "email_verified": false,
+  "message": "Please verify your email to activate your account"
 }
 ```
-
----
 
 ### Login
 
@@ -36,46 +40,50 @@ POST /auth/login
 Content-Type: application/json
 
 {
-    "email": "user@example.com",
-    "password": "SecurePassword123!",
-    "captcha_token": "..."           // if CAPTCHA enabled
+  "email": "user@example.com",
+  "password": "SecurePassword123!",
+  "captcha_token": "..."
 }
 ```
 
-**Response (success):**
+Response (success):
 ```json
 {
-    "access_token": "eyJhbG...",
-    "refresh_token": "eyJhbG...",
-    "user_id": "uuid",
-    "email_verified": true
+  "access_token": "eyJhbG...",
+  "refresh_token": "eyJhbG...",
+  "user_id": "uuid",
+  "email_verified": true,
+  "totp_enabled": false
 }
 ```
 
-**Response (2FA required):**
+Response (2FA required):
 ```json
 {
-    "requires_2fa": true,
-    "temp_token": "eyJhbG...",
-    "user_id": "uuid"
+  "requires_2fa": true,
+  "temp_token": "eyJhbG..."
 }
 ```
 
----
-
-### 2FA Validation
+### Login 2FA
 
 ```http
-POST /auth/2fa/validate
+POST /auth/login/2fa
 Content-Type: application/json
 
 {
-    "temp_token": "eyJhbG...",
-    "totp_code": "123456"
+  "temp_token": "eyJhbG...",
+  "totp_code": "123456"
 }
 ```
 
----
+Backup code:
+```json
+{
+  "temp_token": "eyJhbG...",
+  "backup_code": "12345678"
+}
+```
 
 ### Refresh Token
 
@@ -83,12 +91,8 @@ Content-Type: application/json
 POST /auth/refresh
 Content-Type: application/json
 
-{
-    "refresh_token": "eyJhbG..."
-}
+{"refresh_token": "eyJhbG..."}
 ```
-
----
 
 ### Logout
 
@@ -97,196 +101,160 @@ POST /auth/logout
 Authorization: Bearer <access_token>
 ```
 
----
-
-## Password Management
-
-### Request Reset
-
-```http
-POST /auth/password/reset
-Content-Type: application/json
-
-{
-    "email": "user@example.com"
-}
+Optional body to revoke a single refresh token:
+```json
+{"refresh_token": "eyJhbG..."}
 ```
 
-### Confirm Reset
+## Email Verification
+
+```http
+POST /auth/verify/send
+Authorization: Bearer <access_token>
+```
+
+```http
+POST /auth/verify/code
+Content-Type: application/json
+
+{"user_id":"uuid","code":"123456"}
+```
+
+```http
+GET /auth/verify/link?token=...
+```
+
+## Password Reset
+
+```http
+POST /auth/password/reset/request
+Content-Type: application/json
+
+{"email":"user@example.com"}
+```
 
 ```http
 POST /auth/password/reset/confirm
 Content-Type: application/json
 
-{
-    "token": "reset-token",
-    "new_password": "NewSecurePassword123!"
-}
+{"token":"reset-token","password":"NewSecurePassword123!"}
 ```
 
-### Change Password
+## Email Change
 
 ```http
-POST /auth/password/change
+POST /auth/email/change/request
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{
-    "current_password": "OldPassword123!",
-    "new_password": "NewPassword123!"
-}
+{"new_email":"new@example.com","password":"...","totp_code":"123456"}
 ```
-
----
-
-## Email Verification
-
-### Verify Email
 
 ```http
-POST /auth/verify-email
-Content-Type: application/json
-
-{
-    "token": "verification-token"
-}
+GET /auth/email/change/confirm?token=...
 ```
 
-### Resend Verification
-
-```http
-POST /auth/verify-email/resend
-Authorization: Bearer <access_token>
-```
-
----
-
-## Two-Factor Authentication
-
-### Setup 2FA
+## Two-Factor Authentication (TOTP)
 
 ```http
 POST /auth/2fa/setup
 Authorization: Bearer <access_token>
 ```
 
-**Response:**
+Response includes secret, URL, digits, and optional QR code:
 ```json
 {
-    "secret": "BASE32SECRET",
-    "qr_code": "otpauth://totp/...",
-    "backup_codes": ["code1", "code2", ...]
+  "secret": "BASE32SECRET",
+  "url": "otpauth://totp/...",
+  "issuer": "My App",
+  "account_name": "user@example.com",
+  "digits": 6,
+  "qr_code_png": "...",
+  "qr_code_data_url": "data:image/png;base64,..."
 }
 ```
-
-### Verify 2FA Setup
 
 ```http
 POST /auth/2fa/verify
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{
-    "totp_code": "123456"
-}
+{"code":"123456"}
 ```
 
-### Disable 2FA
+Response returns backup codes:
+```json
+{
+  "backup_codes": ["12345678", "23456789"],
+  "backup_codes_count": 10
+}
+```
 
 ```http
 POST /auth/2fa/disable
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{
-    "totp_code": "123456"
-}
+{"password":"..."} // or totp_code / backup_code
 ```
 
----
+Regenerate codes:
+```http
+POST /auth/2fa/backup-codes
+Authorization: Bearer <access_token>
+```
+
+Download TXT:
+```http
+GET /auth/2fa/backup-codes.txt
+Authorization: Bearer <access_token>
+```
 
 ## WebAuthn/Passkeys
-
-### Begin Registration
 
 ```http
 POST /auth/webauthn/register/begin
 Authorization: Bearer <access_token>
 ```
 
-### Finish Registration
-
 ```http
 POST /auth/webauthn/register/finish
 Authorization: Bearer <access_token>
 Content-Type: application/json
-
-{
-    "id": "...",
-    "rawId": "...",
-    "type": "public-key",
-    "response": {
-        "clientDataJSON": "...",
-        "attestationObject": "..."
-    },
-    "name": "My Passkey"
-}
 ```
-
-### Begin Login
 
 ```http
 POST /auth/webauthn/login/begin
 Content-Type: application/json
-
-{
-    "email": "user@example.com"    // optional
-}
 ```
-
-### Finish Login
 
 ```http
 POST /auth/webauthn/login/finish
 Content-Type: application/json
-
-{
-    "id": "...",
-    "rawId": "...",
-    "type": "public-key",
-    "response": {
-        "clientDataJSON": "...",
-        "authenticatorData": "...",
-        "signature": "...",
-        "userHandle": "..."
-    }
-}
 ```
-
-### List Passkeys
 
 ```http
 GET /auth/webauthn/list
 Authorization: Bearer <access_token>
 ```
 
-### Delete Passkey
-
 ```http
 DELETE /auth/webauthn/delete
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{
-    "credential_id": "..."
-}
+{"credential_id":"..."}
 ```
 
----
+```http
+POST /auth/webauthn/rename
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{"credential_id":"...","name":"My Laptop"}
+```
 
 ## OAuth
-
-### Begin OAuth Flow
 
 ```http
 GET /auth/google
@@ -294,79 +262,41 @@ GET /auth/discord
 GET /auth/github
 GET /auth/microsoft
 GET /auth/twitch
-```
 
-### OAuth Callback
-
-```http
 GET /auth/{provider}/callback?code=...&state=...
 ```
 
----
+If 2FA is required after OAuth:
+```json
+{
+  "requires_2fa": true,
+  "temp_token": "eyJhbG..."
+}
+```
 
-## User Profile
-
-### Get Current User
+## User
 
 ```http
 GET /auth/me
 Authorization: Bearer <access_token>
 ```
 
-**Response:**
-```json
-{
-    "user_id": "uuid",
-    "email": "u***@example.com",
-    "username": "johndoe",
-    "email_verified": true,
-    "totp_enabled": true
-}
-```
-
----
-
-## Health & Metrics
-
-### Health Check
+## Health and Metrics
 
 ```http
-GET /health
-GET /health?detailed=true
+GET /auth/health
+GET /auth/health?detailed=true
+GET /auth/metrics
 ```
-
-### Prometheus Metrics
-
-```http
-GET /metrics
-```
-
----
 
 ## Error Responses
 
-All errors follow this format:
-
 ```json
 {
-    "error": {
-        "code": "ERROR_CODE",
-        "message": "Human readable message"
-    }
+  "error": "human readable message",
+  "code": "ERROR_CODE"
 }
 ```
 
-### Error Codes
-
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| `INVALID_CREDENTIALS` | 401 | Wrong email/password |
-| `ACCOUNT_LOCKED` | 403 | Too many failed attempts |
-| `ACCOUNT_NOT_VERIFIED` | 403 | Email not verified |
-| `ACCOUNT_SUSPENDED` | 403 | Account suspended |
-| `EMAIL_EXISTS` | 409 | Email already registered |
-| `WEAK_PASSWORD` | 400 | Password too weak |
-| `INVALID_TOKEN` | 401 | Invalid/expired token |
-| `2FA_REQUIRED` | 403 | 2FA code needed |
-| `RATE_LIMITED` | 429 | Too many requests |
-| `IP_BLOCKED` | 403 | IP temporarily blocked |
+Notes:
+- Login errors are intentionally generic to reduce account enumeration.

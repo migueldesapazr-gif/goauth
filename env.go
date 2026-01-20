@@ -554,6 +554,9 @@ func ConfigFromEnv() []Option {
 	if url := os.Getenv("GOAUTH_APP_URL"); url != "" {
 		opts = append(opts, WithAppURL(url))
 	}
+	if path := strings.TrimSpace(os.Getenv("GOAUTH_CALLBACK_PATH")); path != "" {
+		opts = append(opts, WithCallbackPath(path))
+	}
 	if mode := strings.TrimSpace(os.Getenv("GOAUTH_SECURITY_MODE")); mode != "" {
 		opts = append(opts, WithSecurityMode(SecurityMode(mode)))
 	}
@@ -607,6 +610,40 @@ func ConfigFromEnv() []Option {
 	}
 	if usernamePolicySet {
 		opts = append(opts, WithUsernamePolicy(usernameMin, usernameMax))
+	}
+	if pattern := strings.TrimSpace(os.Getenv("GOAUTH_USERNAME_PATTERN")); pattern != "" {
+		opts = append(opts, WithUsernamePattern(pattern))
+	}
+	if reserved, ok := envStrings("GOAUTH_USERNAME_RESERVED"); ok {
+		opts = append(opts, WithUsernameReserved(reserved))
+	}
+	if v, ok := envBool("GOAUTH_USERNAME_ALLOW_NUMERIC_ONLY"); ok {
+		opts = append(opts, WithUsernameAllowNumericOnly(v))
+	}
+
+	if v, ok := envInt("GOAUTH_TOTP_DIGITS"); ok {
+		opts = append(opts, WithTOTPDigits(v))
+	}
+	if name := strings.TrimSpace(os.Getenv("GOAUTH_TOTP_ACCOUNT_NAME")); name != "" {
+		opts = append(opts, WithTOTPAccountName(name))
+	}
+	if v, ok := envBool("GOAUTH_TOTP_USE_USERNAME"); ok {
+		opts = append(opts, WithTOTPUseUsername(v))
+	}
+	if v, ok := envBool("GOAUTH_TOTP_QR_ENABLED"); ok {
+		opts = append(opts, WithTOTPQRCode(v))
+	}
+	if v, ok := envInt("GOAUTH_TOTP_QR_SIZE"); ok {
+		opts = append(opts, WithTOTPQRCodeSize(v))
+	}
+	if v, ok := envInt("GOAUTH_BACKUP_CODE_LENGTH"); ok {
+		opts = append(opts, WithBackupCodeLength(v))
+	}
+	if v, ok := envBool("GOAUTH_BACKUP_CODE_DIGITS_ONLY"); ok {
+		opts = append(opts, WithBackupCodeDigitsOnly(v))
+	}
+	if v, ok := envInt("GOAUTH_BACKUP_CODE_COUNT"); ok {
+		opts = append(opts, WithBackupCodeCount(v))
 	}
 
 	passwordMin := DefaultConfig().MinPasswordLength
@@ -664,6 +701,17 @@ func ConfigFromEnv() []Option {
 	}
 	if v, ok := envBool("GOAUTH_REQUIRE_2FA_FOR_EMAIL_CHANGE"); ok {
 		opts = append(opts, WithRequire2FAForEmailChange(v))
+	}
+
+	if v, ok := envInt("GOAUTH_PASSKEYS_MAX_PER_USER"); ok {
+		opts = append(opts, WithMaxPasskeysPerUser(v))
+	}
+	if roles, ok := envStrings("GOAUTH_PASSKEYS_ALLOWED_ROLES"); ok {
+		parsed := make([]Role, 0, len(roles))
+		for _, role := range roles {
+			parsed = append(parsed, Role(strings.ToLower(role)))
+		}
+		opts = append(opts, WithAllowPasskeysForRoles(parsed...))
 	}
 
 	oauthLinkAllow := DefaultConfig().AllowOAuthEmailLinking

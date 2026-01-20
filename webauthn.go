@@ -6,9 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/migueldesapazr-gif/goauth/crypto"
 )
 
 // ==================== WEBAUTHN TYPES ====================
@@ -53,6 +56,16 @@ type WebAuthnStore interface {
 	DeleteChallenge(ctx context.Context, challenge []byte) error
 }
 
+// WebAuthnUsageStore updates usage metadata when supported.
+type WebAuthnUsageStore interface {
+	UpdateCredentialUsage(ctx context.Context, credentialID []byte, signCount uint32, lastUsedAt time.Time) error
+}
+
+// WebAuthnNameStore updates credential names when supported.
+type WebAuthnNameStore interface {
+	UpdateCredentialName(ctx context.Context, userID string, credentialID []byte, name string) error
+}
+
 // ==================== WEBAUTHN CONFIG ====================
 
 // WebAuthnConfig configures WebAuthn/Passkey behavior.
@@ -73,6 +86,10 @@ type WebAuthnConfig struct {
 	ResidentKeyRequirement string
 	// AllowCredentials enables discoverable credentials (passkeys)
 	AllowCredentials bool
+	// MaxPasskeysPerUser limits how many passkeys a user can register (0 = unlimited)
+	MaxPasskeysPerUser int
+	// AllowPasskeysForRoles limits passkey registration to specific roles (empty = allow all)
+	AllowPasskeysForRoles []Role
 }
 
 // DefaultWebAuthnConfig returns sensible defaults for WebAuthn.
@@ -83,6 +100,8 @@ func DefaultWebAuthnConfig() WebAuthnConfig {
 		UserVerification:       "preferred",
 		ResidentKeyRequirement: "preferred",
 		AllowCredentials:       true,
+		MaxPasskeysPerUser:     0,
+		AllowPasskeysForRoles:  nil,
 	}
 }
 
@@ -96,6 +115,14 @@ func (s *AuthService) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http
 		writeError(w, http.StatusUnauthorized, CodeInvalidToken, "unauthorized")
 		return
 	}
+	if s.webauthnStore == nil {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "webauthn not configured")
+		return
+	}
+	if !s.passkeysAllowedForRole(user.Role) {
+		writeError(w, http.StatusForbidden, "PASSKEYS_NOT_ALLOWED", "passkeys not allowed for this role")
+		return
+	}
 
 	// Generate challenge
 	challenge := make([]byte, 32)
@@ -106,28 +133,41 @@ func (s *AuthService) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http
 	}
 
 	// Get existing credentials to exclude
-	var excludeCredentials []map[string]any
-	if s.webauthnStore != nil {
-		creds, _ := s.webauthnStore.GetUserCredentials(ctx, user.ID)
-		for _, c := range creds {
-			excludeCredentials = append(excludeCredentials, map[string]any{
-				"type": "public-key",
-				"id":   base64.RawURLEncoding.EncodeToString(c.CredentialID),
-			})
-		}
+	creds, err := s.webauthnStore.GetUserCredentials(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("failed to get credentials", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
 	}
-
-	// Store challenge
-	if s.webauthnStore != nil {
-		_ = s.webauthnStore.StoreChallenge(ctx, WebAuthnChallenge{
-			Challenge: challenge,
-			UserID:    user.ID,
-			ExpiresAt: time.Now().Add(5 * time.Minute),
-			Type:      "registration",
+	if limit := s.config.WebAuthn.MaxPasskeysPerUser; limit > 0 && len(creds) >= limit {
+		writeError(w, http.StatusBadRequest, "PASSKEY_LIMIT_REACHED", "passkey limit reached")
+		return
+	}
+	var excludeCredentials []map[string]any
+	for _, c := range creds {
+		excludeCredentials = append(excludeCredentials, map[string]any{
+			"type": "public-key",
+			"id":   base64.RawURLEncoding.EncodeToString(c.CredentialID),
 		})
 	}
 
+	// Store challenge
+	if err := s.webauthnStore.StoreChallenge(ctx, WebAuthnChallenge{
+		Challenge: challenge,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+		Type:      "registration",
+	}); err != nil {
+		s.logger.Error("failed to store challenge", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+		return
+	}
+
 	// Build response
+	displayName := user.Username
+	if displayName == "" {
+		displayName = user.ID
+	}
 	options := map[string]any{
 		"challenge": base64.RawURLEncoding.EncodeToString(challenge),
 		"rp": map[string]string{
@@ -136,8 +176,8 @@ func (s *AuthService) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http
 		},
 		"user": map[string]any{
 			"id":          base64.RawURLEncoding.EncodeToString([]byte(user.ID)),
-			"name":        user.Username,
-			"displayName": user.Username,
+			"name":        displayName,
+			"displayName": displayName,
 		},
 		"pubKeyCredParams": []map[string]any{
 			{"type": "public-key", "alg": -7},   // ES256
@@ -167,6 +207,14 @@ func (s *AuthService) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *htt
 	user, ok := GetUserFromContext(ctx)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, CodeInvalidToken, "unauthorized")
+		return
+	}
+	if s.webauthnStore == nil {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "webauthn not configured")
+		return
+	}
+	if !s.passkeysAllowedForRole(user.Role) {
+		writeError(w, http.StatusForbidden, "PASSKEYS_NOT_ALLOWED", "passkeys not allowed for this role")
 		return
 	}
 
@@ -204,14 +252,16 @@ func (s *AuthService) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *htt
 
 	// Verify challenge exists
 	challengeBytes, _ := base64.RawURLEncoding.DecodeString(clientData.Challenge)
-	if s.webauthnStore != nil {
-		stored, err := s.webauthnStore.GetChallenge(ctx, challengeBytes)
-		if err != nil || stored == nil || stored.UserID != user.ID {
-			writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid challenge")
-			return
-		}
-		_ = s.webauthnStore.DeleteChallenge(ctx, challengeBytes)
+	stored, err := s.webauthnStore.GetChallenge(ctx, challengeBytes)
+	if err != nil || stored == nil || stored.UserID != user.ID {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid challenge")
+		return
 	}
+	if stored.Type != "registration" || time.Now().After(stored.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "expired challenge")
+		return
+	}
+	_ = s.webauthnStore.DeleteChallenge(ctx, challengeBytes)
 
 	// Verify origin
 	validOrigin := false
@@ -240,10 +290,27 @@ func (s *AuthService) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Enforce passkey limit (in case of race)
+	if limit := s.config.WebAuthn.MaxPasskeysPerUser; limit > 0 {
+		creds, err := s.webauthnStore.GetUserCredentials(ctx, user.ID)
+		if err != nil {
+			s.logger.Error("failed to get credentials", zap.Error(err))
+			writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+			return
+		}
+		if len(creds) >= limit {
+			writeError(w, http.StatusBadRequest, "PASSKEY_LIMIT_REACHED", "passkey limit reached")
+			return
+		}
+	}
+
 	// Store credential
-	name := req.Name
+	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = "Passkey " + time.Now().Format("2006-01-02")
+	}
+	if len(name) > 64 {
+		name = name[:64]
 	}
 
 	cred := WebAuthnCredential{
@@ -256,12 +323,10 @@ func (s *AuthService) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *htt
 		Name:            name,
 	}
 
-	if s.webauthnStore != nil {
-		if err := s.webauthnStore.CreateCredential(ctx, cred); err != nil {
-			s.logger.Error("failed to store credential", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to register")
-			return
-		}
+	if err := s.webauthnStore.CreateCredential(ctx, cred); err != nil {
+		s.logger.Error("failed to store credential", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to register")
+		return
 	}
 
 	s.logAudit(ctx, user.ID, "webauthn_registered", r, map[string]any{"name": name})
@@ -275,6 +340,10 @@ func (s *AuthService) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *htt
 // handleWebAuthnLoginBegin starts the WebAuthn authentication flow.
 func (s *AuthService) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.webauthnStore == nil {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "webauthn not configured")
+		return
+	}
 
 	// Optional: allow specifying a username for non-discoverable credentials
 	var req struct {
@@ -304,7 +373,8 @@ func (s *AuthService) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Re
 		var user *User
 		var err error
 		if req.Email != "" {
-			emailHash := hashWithPepper(req.Email, s.pepper)
+			email := normalizeEmail(req.Email)
+			emailHash := crypto.HashWithPepper(email, s.pepper)
 			user, err = s.store.Users().GetUserByEmailHash(ctx, emailHash)
 		} else {
 			user, err = s.store.Users().GetUserByUsername(ctx, normalizeUsername(req.Username))
@@ -397,6 +467,14 @@ func (s *AuthService) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid challenge")
 		return
 	}
+	if stored.Type != "authentication" || time.Now().After(stored.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "expired challenge")
+		return
+	}
+	if stored.UserID != "" && stored.UserID != cred.UserID {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid challenge")
+		return
+	}
 	_ = s.webauthnStore.DeleteChallenge(ctx, challengeBytes)
 
 	// Get user
@@ -416,8 +494,12 @@ func (s *AuthService) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Update sign count (simplified - should verify it increased)
-	_ = s.webauthnStore.UpdateCredentialSignCount(ctx, credentialID, cred.SignCount+1)
+	// Update sign count and last used (simplified - should verify it increased)
+	if usageStore, ok := s.webauthnStore.(WebAuthnUsageStore); ok {
+		_ = usageStore.UpdateCredentialUsage(ctx, credentialID, cred.SignCount+1, time.Now())
+	} else {
+		_ = s.webauthnStore.UpdateCredentialSignCount(ctx, credentialID, cred.SignCount+1)
+	}
 
 	// Issue tokens - WebAuthn counts as verified 2FA
 	accessToken, refreshToken, err := s.issueTokens(ctx, user, r, true)
@@ -476,6 +558,11 @@ func (s *AuthService) handleWebAuthnDelete(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	user, _ := GetUserFromContext(ctx)
 
+	if s.webauthnStore == nil {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "webauthn not configured")
+		return
+	}
+
 	var req struct {
 		CredentialID string `json:"credential_id"`
 	}
@@ -490,16 +577,76 @@ func (s *AuthService) handleWebAuthnDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if s.webauthnStore != nil {
-		if err := s.webauthnStore.DeleteCredential(ctx, user.ID, credentialID); err != nil {
-			s.logger.Error("failed to delete credential", zap.Error(err))
-			writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to delete")
-			return
-		}
+	cred, err := s.webauthnStore.GetCredentialByID(ctx, credentialID)
+	if err != nil || cred == nil || cred.UserID != user.ID {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "credential not found")
+		return
+	}
+
+	if err := s.webauthnStore.DeleteCredential(ctx, user.ID, credentialID); err != nil {
+		s.logger.Error("failed to delete credential", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to delete")
+		return
 	}
 
 	s.logAudit(ctx, user.ID, "webauthn_deleted", r, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"message": "passkey deleted"})
+}
+
+// handleWebAuthnRename renames a passkey.
+func (s *AuthService) handleWebAuthnRename(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user, _ := GetUserFromContext(ctx)
+
+	if s.webauthnStore == nil {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "webauthn not configured")
+		return
+	}
+
+	var req struct {
+		CredentialID string `json:"credential_id"`
+		Name         string `json:"name"`
+	}
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid request")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "name is required")
+		return
+	}
+	if len(name) > 64 {
+		name = name[:64]
+	}
+
+	credentialID, err := base64.RawURLEncoding.DecodeString(req.CredentialID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, CodeBadRequest, "invalid credential ID")
+		return
+	}
+
+	cred, err := s.webauthnStore.GetCredentialByID(ctx, credentialID)
+	if err != nil || cred == nil || cred.UserID != user.ID {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "credential not found")
+		return
+	}
+
+	nameStore, ok := s.webauthnStore.(WebAuthnNameStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "passkey renaming not supported")
+		return
+	}
+
+	if err := nameStore.UpdateCredentialName(ctx, user.ID, credentialID, name); err != nil {
+		s.logger.Error("failed to rename credential", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, CodeInternalError, "failed to rename")
+		return
+	}
+
+	s.logAudit(ctx, user.ID, EventPasskeyRenamed, r, map[string]any{"name": name})
+	writeJSON(w, http.StatusOK, map[string]any{"message": "passkey renamed"})
 }
 
 // ==================== OPTIONS ====================
@@ -519,4 +666,20 @@ func WithWebAuthnStore(store WebAuthnStore) Option {
 		s.webauthnStore = store
 		return nil
 	}
+}
+
+func (s *AuthService) passkeysAllowedForRole(role string) bool {
+	allowed := s.config.WebAuthn.AllowPasskeysForRoles
+	if len(allowed) == 0 {
+		return true
+	}
+	if role == "" {
+		role = string(RoleUser)
+	}
+	for _, r := range allowed {
+		if string(r) == role {
+			return true
+		}
+	}
+	return false
 }

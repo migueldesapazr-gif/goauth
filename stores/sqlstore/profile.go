@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
 )
 
 // ProfileStore handles profile operations.

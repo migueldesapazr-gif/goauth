@@ -215,12 +215,14 @@ const (
 	EventEmailChanged         = "email_changed"
 	Event2FAEnabled           = "2fa_enabled"
 	Event2FADisabled          = "2fa_disabled"
+	EventBackupCodesRegenerated = "backup_codes_regenerated"
 	EventAccountLocked        = "account_locked"
 	EventAccountUnlocked      = "account_unlocked"
 	EventAPIKeyCreated        = "api_key_created"
 	EventAPIKeyRevoked        = "api_key_revoked"
 	EventDeviceRevoked        = "device_revoked"
 	EventSuspiciousActivity   = "suspicious_activity"
+	EventPasskeyRenamed       = "webauthn_renamed"
 )
 
 // ==================== OAUTH ====================

@@ -111,6 +111,9 @@ type Config struct {
 	UsernameRequired  bool
 	MinUsernameLength int
 	MaxUsernameLength int
+	UsernamePattern   string
+	UsernameReserved  []string
+	UsernameAllowNumericOnly bool
 
 	// ==================== TOKEN SETTINGS ====================
 	AccessTokenTTL      time.Duration
@@ -119,6 +122,16 @@ type Config struct {
 	PasswordResetTTL    time.Duration
 	MagicLinkTTL        time.Duration
 	EmailChangeTTL      time.Duration
+
+	// ==================== 2FA/TOTP ====================
+	TOTPDigits         int
+	TOTPAccountName    string
+	TOTPUseUsername    bool
+	TOTPQRCodeEnabled  bool
+	TOTPQRCodeSize     int
+	BackupCodeLength   int
+	BackupCodeDigitsOnly bool
+	BackupCodeCount    int
 
 	// ==================== SECURITY ====================
 	MaxLoginAttempts          int
@@ -207,7 +220,7 @@ type Secrets struct {
 func DefaultConfig() Config {
 	return Config{
 		AppName:      "GoAuth",
-		CallbackPath: "/callback",
+		CallbackPath: "",
 
 		// Features
 		EmailPasswordEnabled:      true,
@@ -222,6 +235,9 @@ func DefaultConfig() Config {
 		UsernameRequired:  false,
 		MinUsernameLength: 3,
 		MaxUsernameLength: 32,
+		UsernamePattern:   "",
+		UsernameReserved:  []string{"admin", "root", "support", "help", "staff", "system", "security", "api", "account", "billing"},
+		UsernameAllowNumericOnly: false,
 
 		// Tokens
 		AccessTokenTTL:      15 * time.Minute,
@@ -230,6 +246,16 @@ func DefaultConfig() Config {
 		PasswordResetTTL:    1 * time.Hour,
 		MagicLinkTTL:        15 * time.Minute,
 		EmailChangeTTL:      30 * time.Minute,
+
+		// 2FA/TOTP
+		TOTPDigits:         6,
+		TOTPAccountName:    "",
+		TOTPUseUsername:    false,
+		TOTPQRCodeEnabled:  true,
+		TOTPQRCodeSize:     256,
+		BackupCodeLength:   8,
+		BackupCodeDigitsOnly: true,
+		BackupCodeCount:    10,
 
 		// Security
 		MaxLoginAttempts:          5,
@@ -244,7 +270,7 @@ func DefaultConfig() Config {
 
 		RequireVerifiedEmailForAuth: false,
 		Require2FAForAuth:           false,
-		Require2FAForOAuth:          false,
+		Require2FAForOAuth:          true,
 		Require2FAForMagicLink:      false,
 		Require2FAForSDK:            false,
 		Require2FAForEmailChange:    false,
@@ -291,7 +317,7 @@ func DefaultConfig() Config {
 		TurnstileVerifyURL: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
 		HIBPAPIURL:         "https://api.pwnedpasswords.com/range/",
 		CaptchaRequired:    false,
-		CaptchaFailOpen:    true,
+		CaptchaFailOpen:    false,
 		CaptchaOnRegister:  true,
 		CaptchaOnLogin:     true,
 		CaptchaOnPasswordReset: true,
@@ -334,7 +360,7 @@ func New(opts ...Option) (*AuthService, error) {
 
 	// Validate
 	if svc.store == nil {
-		return nil, errors.New("goauth: database is required (use WithDatabase)")
+		return nil, errors.New("goauth: store is required (use WithStore or WithDatabase)")
 	}
 	if svc.keys == nil || len(svc.jwtSecret) == 0 {
 		return nil, errors.New("goauth: secrets are required (use WithSecrets)")
@@ -358,6 +384,9 @@ func New(opts ...Option) (*AuthService, error) {
 			return nil, errors.New("goauth: turnstile enabled without secret")
 		}
 		svc.captcha = NewTurnstile(svc.config.TurnstileSecret)
+	}
+	if svc.captcha == nil && svc.config.CaptchaRequired {
+		svc.logger.Warn("captcha required but no provider configured")
 	}
 	if svc.securityMonitor == nil {
 		svc.securityMonitor = &defaultSecurityMonitor{logger: svc.logger, svc: svc}
@@ -412,6 +441,7 @@ func (s *AuthService) Handler() http.Handler {
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": "2.0"})
 	})
+	r.Get("/metrics", s.handleMetrics)
 
 	// Email/Password
 	if s.config.EmailPasswordEnabled {
@@ -468,6 +498,8 @@ func (s *AuthService) Handler() http.Handler {
 			r.Post("/2fa/setup", s.handleTwoFASetup)
 			r.Post("/2fa/verify", s.handleTwoFAVerify)
 			r.Post("/2fa/disable", s.handleTwoFADisable)
+			r.Post("/2fa/backup-codes", s.handleBackupCodesRegenerate)
+			r.Get("/2fa/backup-codes.txt", s.handleBackupCodesDownload)
 		}
 
 		// Devices
@@ -499,6 +531,7 @@ func (s *AuthService) Handler() http.Handler {
 			r.Post("/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
 			r.Get("/webauthn/list", s.handleWebAuthnList)
 			r.Delete("/webauthn/delete", s.handleWebAuthnDelete)
+			r.Post("/webauthn/rename", s.handleWebAuthnRename)
 		}
 
 		// Profile

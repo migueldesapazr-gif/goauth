@@ -16,7 +16,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
+	"github.com/migueldesapazr-gif/goauth/stores/postgres"
 )
 
 func main() {
@@ -39,7 +40,7 @@ func main() {
 	// Create auth service with full configuration
 	auth, err := goauth.New(
 		// === REQUIRED ===
-		goauth.WithDatabase(db),
+		postgres.WithDatabase(db),
 		goauth.WithSecretsFromEnv(),
 
 		// === APP INFO ===

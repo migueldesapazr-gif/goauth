@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"login"
+	"github.com/migueldesapazr-gif/goauth"
 )
 
 // Store implements goauth.Store for PostgreSQL.
@@ -450,6 +450,11 @@ func (s *UserStore) UseBackupCode(ctx context.Context, userID string, codeHash [
 	return tag.RowsAffected() > 0, nil
 }
 
+func (s *UserStore) UpdateUserRole(ctx context.Context, userID string, role string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET role = $1 WHERE id = $2`, role, userID)
+	return err
+}
+
 // TokenStore handles token operations.
 type TokenStore struct {
 	pool *pgxpool.Pool
@@ -625,6 +630,27 @@ func (s *AuditStore) InsertAuditLog(ctx context.Context, log goauth.AuditLog) er
 	return err
 }
 
+func (s *AuditStore) GetUserAuditLogs(ctx context.Context, userID string, limit int) ([]goauth.AuditLog, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_type, created_at FROM audit_logs WHERE user_id = $1
+		ORDER BY created_at DESC LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []goauth.AuditLog
+	for rows.Next() {
+		var log goauth.AuditLog
+		if err := rows.Scan(&log.EventType, &log.CreatedAt); err != nil {
+			return nil, err
+		}
+		logs = append(logs, log)
+	}
+	return logs, nil
+}
+
 func nullString(val string) any {
 	if val == "" {
 		return nil
@@ -632,3 +658,22 @@ func nullString(val string) any {
 	return val
 }
 
+// WithDatabase returns a goauth.Option that configures PostgreSQL storage.
+// Use this when initializing goauth:
+//
+//	goauth.New(postgres.WithDatabase(pool), ...)
+func WithDatabase(pool *pgxpool.Pool) goauth.Option {
+	return func(s *goauth.AuthService) error {
+		store := New(pool, pool)
+		return goauth.WithStore(store)(s)
+	}
+}
+
+// WithDatabases returns a goauth.Option that configures PostgreSQL storage
+// with separate pools for users and audit data.
+func WithDatabases(usersPool, auditPool *pgxpool.Pool) goauth.Option {
+	return func(s *goauth.AuthService) error {
+		store := New(usersPool, auditPool)
+		return goauth.WithStore(store)(s)
+	}
+}

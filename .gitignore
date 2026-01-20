@@ -44,3 +44,12 @@ yarn-error.log*
 # Certificates
 *.pem
 *.key
+
+# Lab test data
+labtest/data/
+labtest/*.db
+labtest/*.sqlite
+labtest/test_output/
+
+# Docker volumes
+docker-data/

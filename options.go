@@ -1,10 +1,9 @@
 package goauth
 
 import (
-	"context"
+	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/migueldesapazr-gif/goauth/mailers/sendgrid"
 	"github.com/migueldesapazr-gif/goauth/mailers/smtp"
 	redislimiter "github.com/migueldesapazr-gif/goauth/ratelimit/redis"
-	"github.com/migueldesapazr-gif/goauth/stores/postgres"
 )
 
 // Option configures the AuthService.
@@ -33,23 +31,21 @@ func setOptionalStores(s *AuthService, store Store) {
 
 // ==================== REQUIRED ====================
 
-// WithDatabase sets the PostgreSQL database connection.
-func WithDatabase(db *pgxpool.Pool) Option {
+// ErrStoreRequired is returned when using deprecated WithDatabase without a store.
+var ErrStoreRequired = errors.New("WithDatabase is deprecated; use stores/postgres.WithDatabase or WithStore")
+
+// WithDatabase is deprecated. Use stores/postgres.WithDatabase instead.
+// This stub remains for documentation purposes.
+func WithDatabase(db interface{}) Option {
 	return func(s *AuthService) error {
-		store := postgres.New(db, db)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
-// WithDatabases sets separate connections for users and audit.
-func WithDatabases(users, audit *pgxpool.Pool) Option {
+// WithDatabases is deprecated. Use stores/postgres.WithDatabases instead.
+func WithDatabases(users, audit interface{}) Option {
 	return func(s *AuthService) error {
-		store := postgres.New(users, audit)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
@@ -90,7 +86,7 @@ func WithSecrets(secrets Secrets) Option {
 		if err != nil {
 			return err
 		}
-		s.keys = keys
+		s.keys = &keys
 		return nil
 	}
 }
@@ -237,6 +233,14 @@ func WithAppURL(url string) Option {
 	}
 }
 
+// WithCallbackPath sets the OAuth callback base path (mounted path for /{provider}/callback).
+func WithCallbackPath(path string) Option {
+	return func(s *AuthService) error {
+		s.config.CallbackPath = path
+		return nil
+	}
+}
+
 // ==================== FEATURE TOGGLES ====================
 
 // WithEmailPassword enables/disables email+password auth.
@@ -288,10 +292,98 @@ func WithUsernamePolicy(minLength, maxLength int) Option {
 	}
 }
 
+// WithUsernamePattern enforces a regex pattern for usernames.
+func WithUsernamePattern(pattern string) Option {
+	return func(s *AuthService) error {
+		s.config.UsernamePattern = pattern
+		return nil
+	}
+}
+
+// WithUsernameReserved configures reserved usernames.
+func WithUsernameReserved(reserved []string) Option {
+	return func(s *AuthService) error {
+		s.config.UsernameReserved = reserved
+		return nil
+	}
+}
+
+// WithUsernameAllowNumericOnly allows usernames that are only digits.
+func WithUsernameAllowNumericOnly(allowed bool) Option {
+	return func(s *AuthService) error {
+		s.config.UsernameAllowNumericOnly = allowed
+		return nil
+	}
+}
+
 // WithTOTP enables/disables 2FA.
 func WithTOTP(enabled bool) Option {
 	return func(s *AuthService) error {
 		s.config.TOTPEnabled = enabled
+		return nil
+	}
+}
+
+// WithTOTPDigits sets the number of digits for TOTP (6 or 8).
+func WithTOTPDigits(digits int) Option {
+	return func(s *AuthService) error {
+		s.config.TOTPDigits = digits
+		return nil
+	}
+}
+
+// WithTOTPAccountName sets a fixed account name for TOTP entries.
+func WithTOTPAccountName(name string) Option {
+	return func(s *AuthService) error {
+		s.config.TOTPAccountName = name
+		return nil
+	}
+}
+
+// WithTOTPUseUsername uses the username (when present) for TOTP account name.
+func WithTOTPUseUsername(enabled bool) Option {
+	return func(s *AuthService) error {
+		s.config.TOTPUseUsername = enabled
+		return nil
+	}
+}
+
+// WithTOTPQRCode enables or disables QR code generation in setup responses.
+func WithTOTPQRCode(enabled bool) Option {
+	return func(s *AuthService) error {
+		s.config.TOTPQRCodeEnabled = enabled
+		return nil
+	}
+}
+
+// WithTOTPQRCodeSize sets the QR code size in pixels.
+func WithTOTPQRCodeSize(size int) Option {
+	return func(s *AuthService) error {
+		s.config.TOTPQRCodeSize = size
+		return nil
+	}
+}
+
+// WithBackupCodeLength sets the length of backup codes.
+func WithBackupCodeLength(length int) Option {
+	return func(s *AuthService) error {
+		s.config.BackupCodeLength = length
+		return nil
+	}
+}
+
+// WithBackupCodeDigitsOnly controls whether backup codes are numeric only.
+func WithBackupCodeDigitsOnly(enabled bool) Option {
+	return func(s *AuthService) error {
+		s.config.BackupCodeDigitsOnly = enabled
+		return nil
+	}
+}
+
+// WithBackupCodeCount sets how many backup codes to generate.
+func WithBackupCodeCount(count int) Option {
+	return func(s *AuthService) error {
+		s.config.BackupCodeCount = count
 		return nil
 	}
 }
@@ -443,6 +535,22 @@ func WithTrustProxyHeaders(enabled bool) Option {
 func WithUserAgentHashInLogs(enabled bool) Option {
 	return func(s *AuthService) error {
 		s.config.StoreUserAgentHash = enabled
+		return nil
+	}
+}
+
+// WithMaxPasskeysPerUser limits the number of passkeys per user (0 = unlimited).
+func WithMaxPasskeysPerUser(limit int) Option {
+	return func(s *AuthService) error {
+		s.config.WebAuthn.MaxPasskeysPerUser = limit
+		return nil
+	}
+}
+
+// WithAllowPasskeysForRoles restricts passkey registration to specific roles.
+func WithAllowPasskeysForRoles(roles ...Role) Option {
+	return func(s *AuthService) error {
+		s.config.WebAuthn.AllowPasskeysForRoles = roles
 		return nil
 	}
 }

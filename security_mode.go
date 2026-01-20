@@ -47,6 +47,7 @@ func applySecurityMode(cfg *Config, mode SecurityMode) error {
 	case string(SecurityModeBalanced):
 		cfg.EmailVerificationRequired = true
 		cfg.RequireVerifiedEmailForAuth = true
+		cfg.Require2FAForOAuth = true
 		cfg.MinPasswordLength = 10
 		cfg.PasswordHistorySize = 3
 		cfg.RequirePasswordComplexity = true
@@ -56,7 +57,7 @@ func applySecurityMode(cfg *Config, mode SecurityMode) error {
 		cfg.CaptchaOnLogin = true
 		cfg.CaptchaOnPasswordReset = true
 		cfg.CaptchaOnMagicLink = false
-		cfg.CaptchaFailOpen = true
+		cfg.CaptchaFailOpen = false
 		cfg.BlockDisposableEmails = true
 		cfg.EmailDomainCheck = true
 		cfg.IPBlock.Enabled = true

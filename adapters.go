@@ -1,11 +1,7 @@
 package goauth
 
 import (
-	"database/sql"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/migueldesapazr-gif/goauth/mailers/mailgun"
 	"github.com/migueldesapazr-gif/goauth/mailers/resend"
@@ -13,51 +9,44 @@ import (
 	"github.com/migueldesapazr-gif/goauth/mailers/smtp"
 	"github.com/migueldesapazr-gif/goauth/ratelimit/memory"
 	redisrl "github.com/migueldesapazr-gif/goauth/ratelimit/redis"
-	"github.com/migueldesapazr-gif/goauth/stores/mongodb"
-	"github.com/migueldesapazr-gif/goauth/stores/mysql"
-	"github.com/migueldesapazr-gif/goauth/stores/postgres"
-	"github.com/migueldesapazr-gif/goauth/stores/sqlite"
 )
 
-// WithPostgresStore configures PostgreSQL storage.
-// usersPool is used for user data, auditPool is used for audit logs.
-// They can be the same pool if using a single database.
-func WithPostgresStore(usersPool, auditPool *pgxpool.Pool) Option {
+// Store adapter functions have been moved to their respective packages.
+// Import the store package directly and use its helper functions:
+//
+//   import "github.com/migueldesapazr-gif/goauth/stores/postgres"
+//   goauth.New(postgres.WithDatabase(pool), ...)
+//
+// Or use WithStore with the generic interface:
+//
+//   store := postgres.New(usersPool, auditPool)
+//   goauth.New(goauth.WithStore(store), ...)
+
+// WithPostgresStore is deprecated. Use stores/postgres.WithDatabase instead.
+func WithPostgresStore(usersPool, auditPool interface{}) Option {
 	return func(s *AuthService) error {
-		store := postgres.New(usersPool, auditPool)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
-// WithMySQLStore configures MySQL storage.
-func WithMySQLStore(usersDB, auditDB *sql.DB) Option {
+// WithMySQLStore is deprecated. Use stores/mysql.WithDatabase instead.
+func WithMySQLStore(usersDB, auditDB interface{}) Option {
 	return func(s *AuthService) error {
-		store := mysql.NewWithAudit(usersDB, auditDB)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
-// WithSQLiteStore configures SQLite storage.
-func WithSQLiteStore(usersDB, auditDB *sql.DB) Option {
+// WithSQLiteStore is deprecated. Use stores/sqlite.WithDatabase instead.
+func WithSQLiteStore(usersDB, auditDB interface{}) Option {
 	return func(s *AuthService) error {
-		store := sqlite.NewWithAudit(usersDB, auditDB)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
-// WithMongoStore configures MongoDB storage.
-func WithMongoStore(client *mongo.Client, dbName string) Option {
+// WithMongoStore is deprecated. Use stores/mongodb.WithDatabase instead.
+func WithMongoStore(client interface{}, dbName string) Option {
 	return func(s *AuthService) error {
-		store := mongodb.New(client, dbName)
-		s.store = store
-		setOptionalStores(s, store)
-		return nil
+		return ErrStoreRequired
 	}
 }
 
